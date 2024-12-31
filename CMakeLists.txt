@@ -4,4 +4,9 @@ project(MainProject)
 
 set(CMAKE_C_STANDARD 99)
 
-add_executable(main.o main.c)
+file(GLOB SRC_FILES src/*.c)
+set(SOURCES main.c ${SRC_FILES})
+
+include_directories(${CMAKE_SOURCE_DIR}/src)
+
+add_executable(MainProject ${SOURCES})
