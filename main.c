@@ -4,7 +4,18 @@
 #include "registers.h"
 #include <stdio.h>
 
+void test_encode_instruction_helper_valid_inputs(void);
+void test_encode_instruction_helper_with_displacement_and_immediate(void);
+
 int main() {
+    UNITY_BEGIN(); // Start Unity test runner
+
+    RUN_TEST(test_encode_instruction_helper_valid_inputs);
+    RUN_TEST(test_encode_instruction_helper_with_displacement_and_immediate);
+
+    return UNITY_END(); // End Unity test runner
+}
+/*
     CPU cpu;
     initialize_cpu(&cpu);
 
@@ -35,4 +46,4 @@ int main() {
     print_memory_words(cpu.memory, 0, 32);
 
     return 0;
-}
+*/

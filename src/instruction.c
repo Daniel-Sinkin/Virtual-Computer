@@ -1,11 +1,6 @@
 #include "instruction.h"
 #include <stdio.h>
 
-typedef struct {
-    uint16_t bytes[15];
-    size_t length;
-} EncodedInstruction;
-
 // Encodes an instruction into memory at the specified address
 EncodedInstruction encode_instruction_helper(uint8_t opcode, uint8_t modrm, uint8_t sib, int32_t displacement, int32_t immediate) {
     EncodedInstruction result = {{0}, 0};
