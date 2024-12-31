@@ -1,21 +1,65 @@
 #include "instruction.h"
 #include <stdio.h>
 
+typedef struct {
+    uint16_t bytes[15];
+    size_t length;
+} EncodedInstruction;
+
 // Encodes an instruction into memory at the specified address
-uint16_t encode_instruction(CPU *cpu, uint16_t addr, uint8_t opcode, uint8_t mod, uint8_t reg, uint8_t rm, uint16_t imm) {
-    uint16_t temp_addr = addr;
-    cpu->memory[temp_addr++] = opcode;
+EncodedInstruction encode_instruction_helper(uint8_t opcode, uint8_t modrm, uint8_t sib, int32_t displacement, int32_t immediate) {
+    EncodedInstruction result = {{0}, 0};
+    size_t index = 0;
 
-    if (mod != 0 || reg != 0 || rm != 0) {
-        cpu->memory[temp_addr++] = (mod << 6) | (reg << 3) | rm;
+    // Add the opcode
+    result.bytes[index++] = opcode;
+
+    // Add the ModR/M byte if provided
+    if (modrm != 0) {
+        result.bytes[index++] = modrm;
     }
 
-    if (imm != 0) {
-        cpu->memory[temp_addr++] = (imm & 0xFF);
-        cpu->memory[temp_addr++] = ((imm >> 8) & 0xFF);
+    // Add the SIB byte if provided
+    if (sib != 0) {
+        result.bytes[index++] = sib;
     }
 
-    return temp_addr;
+    // Add displacement if it's non-zero
+    if (displacement != 0) {
+        if (displacement >= -128 && displacement <= 127) {
+            result.bytes[index++] = (uint8_t)(displacement & 0xFF); // 1-byte displacement
+        } else {
+            result.bytes[index++] = (uint8_t)((displacement >> 0) & 0xFF); // 4-byte displacement
+            result.bytes[index++] = (uint8_t)((displacement >> 8) & 0xFF);
+            result.bytes[index++] = (uint8_t)((displacement >> 16) & 0xFF);
+            result.bytes[index++] = (uint8_t)((displacement >> 24) & 0xFF);
+        }
+    }
+
+    // Add immediate if it's non-zero
+    if (immediate != 0) {
+        result.bytes[index++] = (uint8_t)((immediate >> 0) & 0xFF); // 4-byte immediate
+        result.bytes[index++] = (uint8_t)((immediate >> 8) & 0xFF);
+        result.bytes[index++] = (uint8_t)((immediate >> 16) & 0xFF);
+        result.bytes[index++] = (uint8_t)((immediate >> 24) & 0xFF);
+    }
+
+    // Set the length of the instruction
+    result.length = index;
+    return result;
+}
+
+int encode_instructions(uint8_t *cpu_memory, size_t memory_size, uint8_t opcode, uint8_t modrm, uint8_t sib, int32_t displacement, int32_t immediate) {
+    // Use the helper function to encode the instruction
+    EncodedInstruction instruction = encode_instruction_helper(opcode, modrm, sib, displacement, immediate);
+
+    if (instruction.length > memory_size) {
+        // TODO: Handle this error case
+        return -1;
+    }
+
+    memcpy(cpu_memory, instruction.bytes, instruction.length);
+    return 0;
 }
 
 // Decodes a ModR/M byte
