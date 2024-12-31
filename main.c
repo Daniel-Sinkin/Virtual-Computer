@@ -8,10 +8,6 @@
 
 #define MEMORY_SIZE (uint16_t)0xFFFF
 #define NUM_REGISTERS (size_t)8
-#define print_memory(x) _print_memory(x, 4)
-#define print_cpu(x) _print_cpu(x, 4)
-#define get_opcode(addr) get_upper(addr)
-#define get_operand(addr) get_lower(addr)
 
 // x86 ISA specifics
 
@@ -27,20 +23,17 @@ typedef enum {
     MOD_REGISTER_DIRECT = 0b11    // Memory Address + 16-bit displacement
 } MOD;
 
-#define write_instr(addr, opcode, mod, reg, rm, imm)        \
-    do {                                                    \
-        uint16_t temp_addr = addr;                          \
-        cpu.memory[temp_addr] = (opcode & 0xF);             \
-        temp_addr = temp_addr + 1;                          \
-        cpu.memory[temp_addr] = encode_modrm(mod, reg, rm); \
-        temp_addr = temp_addr + 1;                          \
-        if (imm != 0) {                                     \
-            cpu.memory[temp_addr] = imm & 0xFF;             \
-            temp_addr = temp_addr + 1;                      \
-            cpu.memory[temp_addr] = (imm >> 8) & 0xFF;      \
-            temp_addr = temp_addr + 1;                      \
-        }                                                   \
-    } while (0)
+// Writes instruction to memory and returns the next free address
+// Creates a local scope for the adjusted address and then "returns" that
+#define write_instr(addr, opcode, mod, reg, rm, imm)          \
+    ({                                                        \
+        uint16_t temp_addr = (addr);                          \
+        cpu.memory[temp_addr++] = (opcode & 0xFF);            \
+        cpu.memory[temp_addr++] = encode_modrm(mod, reg, rm); \
+        cpu.memory[temp_addr++] = (imm & 0xFF);               \
+        cpu.memory[temp_addr++] = ((imm >> 8) & 0xFF);        \
+        temp_addr;                                            \
+    })
 
 uint8_t encode_modrm(uint8_t mod, uint8_t reg, uint8_t rm) {
     return (mod << 6) | (reg << 3) | rm;
@@ -54,18 +47,37 @@ void decode_modrm(uint8_t modrm, uint8_t *mod, uint8_t *reg, uint8_t *rm) {
 
 // End of x86 ISA specifics
 typedef struct {
-    uint16_t registers[NUM_REGISTERS];
-    uint16_t pc;    // Program counter
-    uint16_t sp;    // Stack pointer
-    uint16_t flags; // Status flags
+    // General-purpose registers (AX, BX, CX, DX)
+    uint16_t ax; // Accumulator register
+    uint16_t bx; // Base register
+    uint16_t cx; // Count register
+    uint16_t dx; // Data register
 
-    uint16_t memory[MEMORY_SIZE]; // Main memory (for now 256 "words")
+    // Segment registers (CS, DS, ES, SS)
+    uint16_t cs; // Code segment
+    uint16_t ds; // Data segment
+    uint16_t es; // Extra segment
+    uint16_t ss; // Stack segment
+
+    // Pointer and index registers (SP, BP, SI, DI)
+    uint16_t sp; // Stack pointer
+    uint16_t bp; // Base pointer
+    uint16_t si; // Source index
+    uint16_t di; // Destination index
+
+    // Instruction Pointer
+    uint16_t ip; // Instruction pointer, this is the "program counter"
+
+    // Flags register
+    uint16_t flags; // Status and control flags
+
+    // Main memory
+    uint16_t memory[MEMORY_SIZE]; // Main memory (default 256 words)
 } CPU;
 
 CPU cpu;
 
 bool is_running = false;
-bool is_initialized = false;
 
 typedef enum {
     NOP = 0x00,
@@ -74,80 +86,68 @@ typedef enum {
     HALT = 0xFF
 } OPCODE;
 
-uint16_t read_word() {
-    return cpu.memory[cpu.pc++];
+// TODO: Fix alignment
+void print_memory_bytes(uint16_t start_addr, uint16_t n_bytes) {
+    printf("ADDR  | RAW BYTES         | STRING   |\n");
+    printf("------|-------------------|----------|\n");
+
+    for (uint16_t i = 0; i < n_bytes; i += 16) {
+        printf("%04X  | ", start_addr + i);
+
+        // Print raw bytes
+        for (uint16_t j = 0; j < 16; ++j) {
+            if (i + j < n_bytes) {
+                printf("%02X ", ((uint8_t *)cpu.memory)[start_addr + i + j]);
+            } else {
+                printf("   ");
+            }
+        }
+
+        printf(" | ");
+
+        // Print ASCII representation
+        for (uint16_t j = 0; j < 16; ++j) {
+            if (i + j < n_bytes) {
+                uint8_t byte = ((uint8_t *)cpu.memory)[start_addr + i + j];
+                printf("%c", isprint(byte) ? byte : '.');
+            }
+        }
+        printf("\n");
+    }
 }
 
-void _print_memory(uint16_t n_words, uint16_t words_per_row) {
-    if (n_words > MEMORY_SIZE) {
-        n_words = MEMORY_SIZE;
-    }
+// TODO: Fix alignment
+void print_memory_words(uint16_t start_addr, uint16_t n_words) {
+    printf("ADDR  | Hexadecimal Values  | STRING   |\n");
+    printf("------|---------------------|----------|\n");
 
-    printf("ADDR | Hexadecimal Values  | STRING   |\n");
-    printf("-----|---------------------|----------|\n");
+    for (uint16_t i = 0; i < n_words; i += 4) {
+        printf("%04X  | ", start_addr + i);
 
-    for (int i = 0; i < n_words; i += words_per_row) {
-        printf("%04X | ", i);
-
-        for (int j = 0; j < words_per_row; j++) {
+        // Print raw words
+        for (uint16_t j = 0; j < 4; ++j) {
             if (i + j < n_words) {
-                printf("%04X ", cpu.memory[i + j]);
+                printf("%04X ", cpu.memory[start_addr / 2 + i + j]);
             } else {
-                // Padding
                 printf("     ");
             }
         }
 
-        printf("| ");
+        printf(" | ");
 
-        for (int j = 0; j < words_per_row; j++) {
+        // Print ASCII representation (high and low bytes of each word)
+        for (uint16_t j = 0; j < 4; ++j) {
             if (i + j < n_words) {
-                uint16_t value = cpu.memory[i + j];
-                char high_byte = (value >> 8) & 0xFF;
-                char low_byte = value & 0xFF;
+                uint16_t word = cpu.memory[start_addr / 2 + i + j];
+                char high_byte = (word >> 8) & 0xFF;
+                char low_byte = word & 0xFF;
 
                 printf("%c", isprint(high_byte) ? high_byte : '.');
                 printf("%c", isprint(low_byte) ? low_byte : '.');
-            } else {
-                // Padding
-                printf(" ");
             }
         }
-        // Padding
-        for (int k = 0; k < i + words_per_row - n_words; k++) {
-            printf(" ");
-        }
-
-        printf(" |\n");
+        printf("\n");
     }
-}
-
-void _print_cpu(uint16_t n_words, uint16_t words_per_row) {
-    printf("Program Counter: %02X\n", cpu.pc);
-    printf("Stack Pointer:   %02X\n", cpu.sp);
-    printf("\n");
-    printf("Registers:\n");
-    for (size_t i = 0; i < NUM_REGISTERS; i++) {
-        printf("    %zu: %02X\n", i, cpu.registers[i]);
-    }
-    printf("\n");
-    if (n_words > 0) {
-        _print_memory(n_words, words_per_row);
-    }
-}
-
-void initialize_cpu() {
-    for (int i = 0; i < 8; i++) {
-        cpu.registers[i] = 0;
-    }
-
-    cpu.pc = 0;
-
-    for (int i = 0; i < MEMORY_SIZE; i++) {
-        cpu.memory[i] = 0;
-    }
-
-    is_initialized = true;
 }
 
 void write_upper_byte(uint16_t addr, uint8_t val) {
@@ -163,12 +163,25 @@ void write_bytes(uint16_t addr, uint16_t lower, uint16_t upper) {
     write_lower_byte(addr, lower);
 }
 
-uint8_t get_lower(uint16_t addr) {
-    return (cpu.memory[addr] >> 8) & 0xF;
+void print_registers(uint16_t n_words, uint16_t words_per_row) {
+    printf("Instruction Pointer: %04X\n", cpu.ip);
+    printf("Stack Pointer:       %04X\n", cpu.sp);
+    printf("\nGeneral Registers:\n");
+    printf("AX: %04X  BX: %04X  CX: %04X  DX: %04X\n", cpu.ax, cpu.bx, cpu.cx, cpu.dx);
+    printf("\nSegment Registers:\n");
+    printf("CS: %04X  DS: %04X  ES: %04X  SS: %04X\n", cpu.cs, cpu.ds, cpu.es, cpu.ss);
+    printf("\nPointer/Index Registers:\n");
+    printf("SP: %04X  BP: %04X  SI: %04X  DI: %04X\n", cpu.sp, cpu.bp, cpu.si, cpu.di);
 }
 
-uint8_t get_upper(uint16_t addr) {
-    return cpu.memory[addr] & 0xF;
+void initialize_cpu() {
+    cpu.ax = cpu.bx = cpu.cx = cpu.dx = 0;
+    cpu.cs = cpu.ds = cpu.es = cpu.ss = 0;
+    cpu.sp = cpu.bp = cpu.si = cpu.di = 0;
+    cpu.ip = 0;
+    for (int i = 0; i < MEMORY_SIZE; i++) {
+        cpu.memory[i] = 0;
+    }
 }
 
 void hello_world() {
@@ -180,30 +193,32 @@ void hello_world() {
     write_bytes(3, ' ', 'W');
     write_bytes(4, 'o', 'r');
     write_bytes(5, 'l', 'd');
+    print_memory_bytes(0, 12 * 2);
+}
 
-    print_memory(12);
-
-    initialize_cpu();
+uint16_t read_word() {
+    return cpu.memory[cpu.ip++];
 }
 
 int execute_step() {
-    uint8_t opcode = get_opcode(cpu.pc);
-    uint8_t modrm = cpu.memory[cpu.pc + 1];
+    uint8_t opcode = cpu.memory[cpu.ip] & 0xFF;
+    uint8_t modrm = (cpu.memory[cpu.ip + 1]) & 0xFF;
     uint8_t mod, reg, rm;
+
     decode_modrm(modrm, &mod, &reg, &rm);
-    cpu.pc += 2;
+    cpu.ip += 2;
 
     switch (opcode) {
     case LOAD: {
-        uint16_t value = read_word();
-        cpu.registers[reg] = value;
-        cpu.pc += 2;
+        uint16_t value = cpu.memory[cpu.ip] | (cpu.memory[cpu.ip + 1] << 8);
+        cpu.ax = value;
+        cpu.ip += 2;
         break;
     }
 
     case ADD: {
-        uint16_t src = (mod == 0b11) ? cpu.registers[rm] : cpu.memory[rm];
-        cpu.registers[reg] += src;
+        uint16_t src = (mod == 0b11) ? cpu.ax : cpu.memory[rm];
+        cpu.ax += src;
         break;
     }
 
@@ -222,15 +237,18 @@ int execute_step() {
 
 int main() {
     initialize_cpu();
-    is_running = true;
 
-    write_instr(0, LOAD, MOD_REGISTER_DIRECT, 0, 0, 42);
-    write_instr(1, ADD, MOD_REGISTER_DIRECT, 0, 1, 0);
-    write_instr(2, HALT, 0, 0, 0, 1);
+    // Write instructions
+    uint16_t pc = 0;
+    pc = write_instr(pc, LOAD, MOD_REGISTER_DIRECT, 0, 0, 42); // LOAD AX, 42
+    pc = write_instr(pc, LOAD, MOD_REGISTER_DIRECT, 1, 0, 99); // LOAD BX, 99
 
-    // print_cpu(12);
+    // Dump memory for debugging
+    printf("\nInstruction Memory (Byte-Oriented):\n");
+    print_memory_bytes(0, pc * 2);
 
-    hello_world();
+    printf("\nData Memory (Word-Oriented):\n");
+    print_memory_words(0, pc);
 
     return 0;
 }
